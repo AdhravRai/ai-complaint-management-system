@@ -4,10 +4,13 @@ from app.agents.graph import complaint_graph
 from app.models.schemas import (
     AIAnalysisResult,
     ComplaintAnalysisRequest,
+    ComplaintCreate,
+    CopilotRequest,
+    CopilotResponse,
 )
 from app.services.pdf_parser import extract_text_from_pdf
 from sqlalchemy.orm import Session
-
+from app.agents.llm import llm
 from app.database.database import get_db
 from app.database.models import Complaint
 from app.models.schemas import ComplaintCreate
@@ -101,3 +104,32 @@ def save_complaint(data: ComplaintCreate, db: Session = Depends(get_db)):
         "message": "Complaint saved successfully.",
         "complaint_id": complaint.id,
     }
+@router.post("/copilot", response_model=CopilotResponse)
+def copilot(request: CopilotRequest):
+    prompt = f"""
+You are an AI Copilot assisting a pharmaceutical quality team
+with customer complaint review.
+
+Use only the information provided below.
+
+Complaint information:
+{request.complaint.model_dump_json(indent=2)}
+
+Current AI risk assessment:
+{request.risk_assessment.model_dump_json(indent=2)}
+
+Recommended actions:
+{request.recommendations}
+
+User question:
+{request.question}
+
+Answer the user's question clearly and concisely.
+Do not invent facts that are not present in the complaint.
+If the information is not available, say that it is not available
+from the complaint information.
+"""
+
+    response = llm.invoke(prompt)
+
+    return CopilotResponse(answer=response.content)

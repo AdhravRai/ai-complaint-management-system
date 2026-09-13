@@ -39,3 +39,12 @@ class ComplaintCreate(BaseModel):
     complaint: ComplaintExtraction
     risk_assessment: RiskAssessment = Field(default_factory=RiskAssessment)
     recommendations: list[str] = Field(default_factory=list)
+class CopilotRequest(BaseModel):
+    complaint: ComplaintExtraction
+    risk_assessment: RiskAssessment
+    recommendations: list[str] = Field(default_factory=list)
+    question: str = Field(min_length=1)
+
+
+class CopilotResponse(BaseModel):
+    answer: str

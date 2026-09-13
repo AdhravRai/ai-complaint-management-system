@@ -63,3 +63,19 @@ export async function saveComplaint(data) {
 
   return response.json();
 }
+export async function askCopilot(data) {
+  const response = await fetch(`${API_BASE_URL}/api/complaints/copilot`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || "Failed to get AI Copilot response.");
+  }
+
+  return response.json();
+}

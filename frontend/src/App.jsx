@@ -1,25 +1,31 @@
 import { useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import "./App.css";
 import {
+  resetComplaint,
   setAnalysisResult,
   setError,
   setLoading,
   updateFormField,
-  resetComplaint,
 } from "./store/complaintSlice";
 import {
-  analyzeComplaintText,
   analyzeComplaintPdf,
+  analyzeComplaintText,
+  askCopilot,
   saveComplaint,
 } from "./services/api";
 
 function App() {
-  const complaint = useSelector((state) => state.complaint);
   const dispatch = useDispatch();
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [complaintText, setComplaintText] = useState("");
-  const [saveMessage, setSaveMessage] = useState("");
+  const complaint = useSelector((state) => state.complaint);
   const fileInputRef = useRef(null);
+
+  const [complaintText, setComplaintText] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [saveMessage, setSaveMessage] = useState("");
+  const [copilotQuestion, setCopilotQuestion] = useState("");
+  const [copilotAnswer, setCopilotAnswer] = useState("");
+  const [copilotLoading, setCopilotLoading] = useState(false);
 
   const handleAnalyze = async () => {
     if (!complaintText.trim()) {
@@ -27,8 +33,10 @@ function App() {
       return;
     }
 
+    dispatch(setLoading(true));
+    setSaveMessage("");
+
     try {
-      dispatch(setLoading(true));
       const result = await analyzeComplaintText(complaintText);
       dispatch(setAnalysisResult(result));
     } catch (error) {
@@ -38,12 +46,14 @@ function App() {
 
   const handlePdfAnalyze = async () => {
     if (!selectedFile) {
-      dispatch(setError("Please choose a PDF first."));
+      dispatch(setError("Please select a PDF file first."));
       return;
     }
 
+    dispatch(setLoading(true));
+    setSaveMessage("");
+
     try {
-      dispatch(setLoading(true));
       const result = await analyzeComplaintPdf(selectedFile);
       dispatch(setAnalysisResult(result));
     } catch (error) {
@@ -59,34 +69,37 @@ function App() {
     dispatch(resetComplaint());
     setComplaintText("");
     setSelectedFile(null);
+    setSaveMessage("");
+    setCopilotQuestion("");
+    setCopilotAnswer("");
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
-  const handleSave = async () => {
-    setSaveMessage("");
 
+  const handleSave = async () => {
     const requiredFields = [
-      ["customer_name", "Customer name"],
-      ["product_name", "Product name"],
-      ["batch_number", "Batch / Lot number"],
-      ["complaint_type", "Complaint type"],
-      ["description", "Complaint description"],
+      ["customer_name", "Customer Name"],
+      ["product_name", "Product Name"],
+      ["batch_number", "Batch Number"],
+      ["complaint_type", "Complaint Type"],
+      ["description", "Description"],
     ];
 
-    const missingField = requiredFields.find(
-      ([field]) => !complaint.formData[field]?.toString().trim()
-    );
+    const missingFields = requiredFields
+      .filter(([field]) => !complaint.formData[field])
+      .map(([, label]) => label);
 
-    if (missingField) {
-      dispatch(setError(`Please provide ${missingField[1]} before saving.`));
+    if (missingFields.length > 0) {
+      setSaveMessage(`Please complete: ${missingFields.join(", ")}`);
       return;
     }
 
-    try {
-      dispatch(setLoading(true));
+    dispatch(setLoading(true));
+    setSaveMessage("");
 
+    try {
       const result = await saveComplaint({
         complaint: complaint.formData,
         risk_assessment: complaint.riskAssessment,
@@ -96,348 +109,434 @@ function App() {
       setSaveMessage(`Complaint saved successfully. ID: ${result.complaint_id}`);
       dispatch(setLoading(false));
     } catch (error) {
-      dispatch(setError(error.message));
+      setSaveMessage(error.message);
       dispatch(setLoading(false));
     }
   };
+  const handleCopilot = async () => {
+    if (!copilotQuestion.trim()) {
+      setCopilotAnswer("Please enter a question about this complaint.");
+      return;
+    }
+
+    if (!complaint.formData.description) {
+      setCopilotAnswer("Please analyze a complaint before using the AI Copilot.");
+      return;
+    }
+
+    setCopilotLoading(true);
+    setCopilotAnswer("");
+
+    try {
+      const result = await askCopilot({
+        complaint: complaint.formData,
+        risk_assessment: complaint.riskAssessment,
+        recommendations: complaint.recommendations,
+        question: copilotQuestion,
+      });
+
+      setCopilotAnswer(result.answer);
+    } catch (error) {
+      setCopilotAnswer(error.message);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
+  const totalRequiredFields = 11;
+  const hasAnalysis =
+    complaint.formData.customer_name ||
+    complaint.formData.product_name ||
+    complaint.formData.product_strength ||
+    complaint.formData.batch_number ||
+    complaint.formData.manufacturing_date ||
+    complaint.formData.expiry_date ||
+    complaint.formData.quantity_affected ||
+    complaint.formData.quantity_unit ||
+    complaint.formData.complaint_type ||
+    complaint.formData.complaint_date ||
+    complaint.formData.description ||
+    complaint.riskAssessment.risk_level;
+
+  const missingCount = complaint.missingInformation.length;
+  const completedCount = totalRequiredFields - missingCount;
+  const completenessPercentage = hasAnalysis
+    ? Math.max(0, Math.round((completedCount / totalRequiredFields) * 100))
+    : null;
 
   return (
-    <div className="app">
+    <div className="app-shell">
       <header className="topbar">
         <div>
-          <h1>AI Complaint Management</h1>
-          <p>AI-powered complaint intake and triage</p>
+          <h1>AI Complaint Management System</h1>
+          <p>Pharmaceutical Customer Complaint Intake</p>
         </div>
 
-        <div className="status-badge">
-          <span className="status-dot"></span>
-          AI Assistant Ready
-        </div>
+        <button className="secondary-button" onClick={handleReset}>
+          New Complaint
+        </button>
       </header>
 
-      <main className="main-content">
-        <section className="panel complaint-panel">
+      <main className="main-grid">
+        <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>Complaint Details</h2>
-              <p>Review and complete the complaint information</p>
+              <span className="eyebrow">Complaint Intake</span>
+              <h2>Log Customer Complaint</h2>
             </div>
           </div>
 
-          <div className="form-section">
-            <h3>Origin & Customer Details</h3>
+          <div className="form-grid">
+            <label>
+              Complaint Source
+              <input
+                value={complaint.formData.complaint_source || ""}
+                onChange={(event) =>
+                  handleFieldChange("complaint_source", event.target.value)
+                }
+                placeholder="Email, phone, portal..."
+              />
+            </label>
 
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Complaint Source</label>
-                <input
-                  type="text"
-                  value={complaint.formData.complaint_source}
-                  placeholder="e.g. Email, Phone, Portal"
-                  onChange={(event) =>
-                    handleFieldChange("complaint_source", event.target.value)
-                  }
-                />
-              </div>
+            <label>
+              Customer Name
+              <input
+                value={complaint.formData.customer_name || ""}
+                onChange={(event) =>
+                  handleFieldChange("customer_name", event.target.value)
+                }
+                placeholder="Customer name"
+              />
+            </label>
 
-              <div className="form-group">
-                <label>Customer Name</label>
-                <input
-                  type="text"
-                  value={complaint.formData.customer_name}
-                  placeholder="Customer name"
-                  onChange={(event) =>
-                    handleFieldChange("customer_name", event.target.value)
-                  }
-                />
-              </div>
-            </div>
+            <label>
+              Product Name
+              <input
+                value={complaint.formData.product_name || ""}
+                onChange={(event) =>
+                  handleFieldChange("product_name", event.target.value)
+                }
+                placeholder="Product name"
+              />
+            </label>
+
+            <label>
+              Product Strength
+              <input
+                value={complaint.formData.product_strength || ""}
+                onChange={(event) =>
+                  handleFieldChange("product_strength", event.target.value)
+                }
+                placeholder="e.g. 500 mg"
+              />
+            </label>
+
+            <label>
+              Batch Number
+              <input
+                value={complaint.formData.batch_number || ""}
+                onChange={(event) =>
+                  handleFieldChange("batch_number", event.target.value)
+                }
+                placeholder="Batch number"
+              />
+            </label>
+
+            <label>
+              Manufacturing Date
+              <input
+                value={complaint.formData.manufacturing_date || ""}
+                onChange={(event) =>
+                  handleFieldChange(
+                    "manufacturing_date",
+                    event.target.value
+                  )
+                }
+                placeholder="YYYY-MM-DD"
+              />
+            </label>
+
+            <label>
+              Expiry Date
+              <input
+                value={complaint.formData.expiry_date || ""}
+                onChange={(event) =>
+                  handleFieldChange("expiry_date", event.target.value)
+                }
+                placeholder="YYYY-MM-DD"
+              />
+            </label>
+
+            <label>
+              Quantity Affected
+              <input
+                value={complaint.formData.quantity_affected || ""}
+                onChange={(event) =>
+                  handleFieldChange("quantity_affected", event.target.value)
+                }
+                placeholder="Quantity"
+              />
+            </label>
+
+            <label>
+              Quantity Unit
+              <input
+                value={complaint.formData.quantity_unit || ""}
+                onChange={(event) =>
+                  handleFieldChange("quantity_unit", event.target.value)
+                }
+                placeholder="bottles, packs..."
+              />
+            </label>
+
+            <label>
+              Complaint Type
+              <input
+                value={complaint.formData.complaint_type || ""}
+                onChange={(event) =>
+                  handleFieldChange("complaint_type", event.target.value)
+                }
+                placeholder="Packaging defect, quality issue..."
+              />
+            </label>
+
+            <label>
+              Complaint Date
+              <input
+                value={complaint.formData.complaint_date || ""}
+                onChange={(event) =>
+                  handleFieldChange("complaint_date", event.target.value)
+                }
+                placeholder="YYYY-MM-DD"
+              />
+            </label>
           </div>
 
-          <div className="form-section">
-            <h3>Product & Batch Identification</h3>
+          <label className="full-width">
+            Complaint Description
+            <textarea
+              value={complaint.formData.description || ""}
+              onChange={(event) =>
+                handleFieldChange("description", event.target.value)
+              }
+              placeholder="Describe the customer complaint..."
+              rows="5"
+            />
+          </label>
 
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Product Name</label>
-                <input
-                  type="text"
-                  value={complaint.formData.product_name}
-                  placeholder="Product name"
-                  onChange={(event) =>
-                    handleFieldChange("product_name", event.target.value)
-                  }
-                />
+          <div className="assessment-card">
+            <div className="assessment-heading">
+              <div>
+                <span className="eyebrow">Initial Assessment</span>
+                <h3>AI Copilot — Risk Assessment</h3>
               </div>
 
-              <div className="form-group">
-                <label>Product Strength / Grade</label>
-                <input
-                  type="text"
-                  value={complaint.formData.product_strength}
-                  placeholder="e.g. 500 mg"
-                  onChange={(event) =>
-                    handleFieldChange("product_strength", event.target.value)
-                  }
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Batch / Lot Number</label>
-                <input
-                  type="text"
-                  value={complaint.formData.batch_number}
-                  placeholder="Batch number"
-                  onChange={(event) =>
-                    handleFieldChange("batch_number", event.target.value)
-                  }
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Quantity Affected</label>
-                <div className="quantity-row">
-                  <input
-                    type="text"
-                    value={complaint.formData.quantity_affected}
-                    placeholder="Quantity"
-                    onChange={(event) =>
-                      handleFieldChange(
-                        "quantity_affected",
-                        event.target.value
-                      )
-                    }
-                  />
-                  <input
-                    type="text"
-                    value={complaint.formData.quantity_unit}
-                    placeholder="Unit"
-                    onChange={(event) =>
-                      handleFieldChange("quantity_unit", event.target.value)
-                    }
-                  />
+              <span className={`risk-badge ${complaint.riskAssessment.risk_level?.toLowerCase() || ""}`}>
+                {complaint.riskAssessment.risk_level || "Pending"}
+              </span>
+            </div>
+            <div className="copilot-chat">
+              <div className="copilot-header">
+                <div>
+                  <span className="eyebrow">AI Copilot</span>
+                  <h4>Ask about this complaint</h4>
                 </div>
               </div>
 
-              <div className="form-group">
-                <label>Manufacturing Date</label>
+              <div className="copilot-input-row">
                 <input
-                  type="text"
-                  value={complaint.formData.manufacturing_date}
-                  placeholder="Not provided"
-                  onChange={(event) =>
-                    handleFieldChange(
-                      "manufacturing_date",
-                      event.target.value
-                    )
-                  }
+                  value={copilotQuestion}
+                  onChange={(event) => setCopilotQuestion(event.target.value)}
+                  placeholder="Why is this complaint classified as high risk?"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      handleCopilot();
+                    }
+                  }}
                 />
+
+                <button
+                  className="secondary-button"
+                  onClick={handleCopilot}
+                  disabled={copilotLoading}
+                >
+                  {copilotLoading ? "Asking..." : "Ask AI"}
+                </button>
               </div>
 
-              <div className="form-group">
-                <label>Expiry Date</label>
-                <input
-                  type="text"
-                  value={complaint.formData.expiry_date}
-                  placeholder="Not provided"
-                  onChange={(event) =>
-                    handleFieldChange("expiry_date", event.target.value)
-                  }
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="form-section">
-            <h3>Complaint Details</h3>
-
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Complaint Type</label>
-                <input
-                  type="text"
-                  value={complaint.formData.complaint_type}
-                  placeholder="Complaint type"
-                  onChange={(event) =>
-                    handleFieldChange("complaint_type", event.target.value)
-                  }
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Complaint Date</label>
-                <input
-                  type="text"
-                  value={complaint.formData.complaint_date}
-                  placeholder="Not provided"
-                  onChange={(event) =>
-                    handleFieldChange("complaint_date", event.target.value)
-                  }
-                />
-              </div>
+              {copilotAnswer && (
+                <div className="copilot-answer">
+                  <span>AI Copilot</span>
+                  <p>{copilotAnswer}</p>
+                </div>
+              )}
             </div>
 
-            <div className="form-group">
-              <label>Detailed Complaint Description</label>
-              <textarea
-                value={complaint.formData.description}
-                placeholder="Complaint description will appear here after AI analysis..."
-                rows="5"
-                onChange={(event) =>
-                  handleFieldChange("description", event.target.value)
-                }
-              />
-            </div>
-          </div>
-
-          <div className="form-section">
-            <h3>Initial Assessment</h3>
-
-            <div className="assessment-grid">
-              <div className="assessment-card">
+            <div className="risk-grid">
+              <div>
                 <span>Severity</span>
                 <strong>
-                  {complaint.riskAssessment.severity || "Not assessed"}
+                  {complaint.riskAssessment.severity || "Pending"}
                 </strong>
               </div>
 
-              <div className="assessment-card">
+              <div>
                 <span>Priority</span>
                 <strong>
-                  {complaint.riskAssessment.priority || "Not assessed"}
+                  {complaint.riskAssessment.priority || "Pending"}
                 </strong>
               </div>
 
-              <div className="assessment-card">
-                <span>Risk Level</span>
-                <strong>
-                  {complaint.riskAssessment.risk_level || "Not assessed"}
-                </strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="form-actions">
-            <button className="secondary-button" onClick={handleReset}>
-              Reset Form
-            </button>
-            <button
-              className="primary-button"
-              onClick={handleSave}
-              disabled={complaint.loading}
-            >
-              {complaint.loading ? "Saving..." : "Save Complaint"}
-            </button>
-          </div>
-          {saveMessage && <div className="success-message">{saveMessage}</div>}
-        </section>
-
-        <aside className="panel assistant-panel">
-          <div className="assistant-header">
-            <div className="assistant-icon">✦</div>
-            <div>
-              <h2>AI Intake Assistant</h2>
-              <p>Extract and assess complaint information</p>
-            </div>
-          </div>
-
-          <div className="upload-box">
-            <div className="upload-icon">↑</div>
-            <h3>Upload Complaint</h3>
-            <p>Upload a PDF or paste complaint text below</p>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf"
-              hidden
-              onChange={(event) => {
-                setSelectedFile(event.target.files[0] || null);
-              }}
-            />
-
-            <button
-              className="upload-button"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Choose PDF
-            </button>
-
-            {selectedFile && (
-              <p className="selected-file">
-                Selected: {selectedFile.name}
-              </p>
-            )}
-
-            <button
-              className="analyze-button"
-              onClick={handlePdfAnalyze}
-              disabled={complaint.loading || !selectedFile}
-            >
-              {complaint.loading ? "Analyzing PDF..." : "✦ Analyze PDF"}
-            </button>
-          </div>
-
-          <div className="divider">
-            <span>OR</span>
-          </div>
-
-          <div className="form-group">
-            <label>Complaint Text</label>
-            <textarea
-              placeholder="Paste the customer complaint here..."
-              rows="7"
-              value={complaintText}
-              onChange={(event) => setComplaintText(event.target.value)}
-            />
-          </div>
-
-          <button
-            className="analyze-button"
-            onClick={handleAnalyze}
-            disabled={complaint.loading}
-          >
-            {complaint.loading ? "Analyzing..." : "✦ Analyze Complaint"}
-          </button>
-
-          {complaint.error && (
-            <div className="error-message">{complaint.error}</div>
-          )}
-
-          <div className="ai-section">
-            <h3>AI Assessment</h3>
-
-            <div className="risk-box">
-              <div className="risk-header">
+              <div>
                 <span>Risk Level</span>
                 <strong>
                   {complaint.riskAssessment.risk_level || "Pending"}
                 </strong>
               </div>
+            </div>
 
+            <div className="reason-box">
+              <span>AI Reasoning</span>
               <p>
                 {complaint.riskAssessment.reason ||
-                  "Submit a complaint to generate an initial AI risk assessment."}
+                  "Analyze a complaint to generate the initial AI risk assessment."}
               </p>
             </div>
           </div>
 
-          <div className="ai-section">
-            <h3>Recommendations</h3>
+          <div className="completeness-card">
+            <div className="assessment-heading">
+              <div>
+                <span className="eyebrow">Bonus Feature</span>
+                <h3>Complaint Completeness Checker</h3>
+              </div>
+
+              <strong>
+                {completenessPercentage === null
+                  ? "Not analyzed"
+                  : `${completenessPercentage}%`}
+              </strong>
+            </div>
+
+            <div className="completeness-progress">
+              <div
+                style={{ width: `${completenessPercentage}%` }}
+              />
+            </div>
+
+            {completenessPercentage === null ? (
+                <p className="completeness-note">
+                  Analyze a complaint to check whether the required information is complete.
+                </p>
+              ) : complaint.missingInformation.length === 0 ? (
+                <p className="complete-message">
+                  ✓ All required complaint information is available.
+                </p>
+              ) : (
+                <div className="missing-information">
+                  <span>Information Needed for Completenes</span>
+                  <ul>
+                    {complaint.missingInformation.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            <p className="completeness-note">
+              The checker identifies complaint information that may be needed for a
+              complete quality review.
+            </p>
+          </div>
+
+          <div className="recommendation-card">
+            <span className="eyebrow">AI Guidance</span>
+            <h3>Recommended Actions</h3>
 
             {complaint.recommendations.length === 0 ? (
-              <p className="empty-text">
-                Recommendations will appear after AI analysis.
+              <p>
+                Analyze a complaint to generate recommended follow-up actions.
               </p>
             ) : (
-              <ul className="recommendation-list">
+              <ul>
                 {complaint.recommendations.map((recommendation, index) => (
                   <li key={index}>{recommendation}</li>
                 ))}
               </ul>
             )}
           </div>
-        </aside>
+
+          {saveMessage && (
+            <div className="save-message">
+              {saveMessage}
+            </div>
+          )}
+
+          <button
+            className="primary-button"
+            onClick={handleSave}
+            disabled={complaint.loading}
+          >
+            {complaint.loading ? "Saving..." : "Log Customer Complaint"}
+          </button>
+        </section>
+
+        <section className="panel assistant-panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">AI Assistant</span>
+              <h2>Complaint Analysis</h2>
+            </div>
+          </div>
+
+          <div className="upload-card">
+            <h3>Analyze Complaint PDF</h3>
+            <p>
+              Upload a pharmaceutical complaint PDF and let the AI extract
+              the relevant information.
+            </p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              onChange={(event) =>
+                setSelectedFile(event.target.files?.[0] || null)
+              }
+            />
+
+            <button
+              className="secondary-button full-button"
+              onClick={handlePdfAnalyze}
+              disabled={complaint.loading}
+            >
+              {complaint.loading ? "Analyzing..." : "Analyze PDF"}
+            </button>
+          </div>
+
+          <div className="text-analysis-card">
+            <h3>Analyze Complaint Text</h3>
+
+            <textarea
+              value={complaintText}
+              onChange={(event) => setComplaintText(event.target.value)}
+              placeholder="Paste the customer complaint here..."
+              rows="12"
+            />
+
+            <button
+              className="primary-button full-button"
+              onClick={handleAnalyze}
+              disabled={complaint.loading}
+            >
+              {complaint.loading ? "Analyzing..." : "Analyze Complaint"}
+            </button>
+          </div>
+
+          {complaint.error && (
+            <div className="error-message">
+              {complaint.error}
+            </div>
+          )}
+        </section>
       </main>
     </div>
   );
